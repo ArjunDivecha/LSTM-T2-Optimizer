@@ -1,9 +1,10 @@
 # Product Requirements Document (PRD)
 # xLSTM-TS Factor Return Forecasting & Portfolio Optimization System
 
-**Version:** 1.0
+**Version:** 1.1
 **Date:** December 14, 2025
-**Status:** Approved - Ready for Implementation
+**Status:** ✅ APPROVED - Ready for Implementation
+**Philosophy:** NO FALLBACKS, FAIL IS FAIL
 **Project Code:** LSTM-T2-OPT
 
 ---
@@ -18,6 +19,40 @@ Build a deep learning system using Extended Long Short-Term Memory (xLSTM) archi
 - Optimize portfolio weights to maximize Sharpe ratio
 - Maintain minimum 10% annualized volatility
 - Deploy on H100 GPUs with production-ready pipeline
+
+---
+
+## 0. Core Philosophy: NO FALLBACKS, FAIL IS FAIL
+
+**CRITICAL REQUIREMENT:**
+
+This system operates under a strict "fail loud" philosophy:
+
+✅ **ALLOWED:**
+- High-quality real data only
+- Dropping missing factors for specific periods
+- Winsorizing outliers (preprocessing)
+- Halting operations when failures occur
+- Alerting and investigating root causes
+- Fixing problems by retraining or debugging
+
+❌ **FORBIDDEN:**
+- Fallback strategies (equal-weight, minimum variance, etc.)
+- Synthetic data generation
+- Data imputation or forward filling
+- Using stale/cached predictions when model fails
+- Relaxing constraints to force solutions
+- Hybrid approaches mixing predictions with sample statistics
+- Working around failures instead of fixing them
+
+**Rationale:**
+- Fallbacks hide real problems and accumulate technical debt
+- Synthetic data creates false confidence in model robustness
+- If the model can't produce valid predictions, trading should STOP
+- Better to halt and fix than to trade on garbage predictions
+- Failures are valuable signals that the model needs attention
+
+**This is non-negotiable. FAIL IS FAIL.**
 
 ---
 
@@ -952,32 +987,49 @@ Then:
 4. Model health metrics
 ```
 
-### 10.3 Fail-Safe Mechanisms
+### 10.3 Failure Handling - FAIL LOUD
 
-**Model Failure:**
+**Philosophy: NO FALLBACKS, NO SYNTHETIC DATA, FAIL IS FAIL**
+
+**Model Inference Failure:**
 ```
 If model inference fails:
-  1. Use last valid prediction (up to 5 days old)
-  2. If >5 days: Revert to equal-weight portfolio
-  3. Alert: CRITICAL
+  1. HALT all operations immediately
+  2. Alert: CRITICAL - System down
+  3. Investigate root cause
+  4. Fix the model, don't work around it
+  5. NO fallback to equal-weight or any other strategy
+  6. NO use of stale predictions
 ```
 
-**Optimization Failure:**
+**Portfolio Optimization Failure:**
 ```
 If solver doesn't converge:
-  1. Relax constraints slightly (vol 9.5% instead of 10%)
-  2. If still fails: Use minimum variance solution
-  3. If still fails: Use equal-weight
-  4. Alert: CRITICAL
+  1. HALT all operations immediately
+  2. Alert: CRITICAL - Optimization infeasible
+  3. Log full state (μ, Σ, constraints)
+  4. Investigate why optimization failed
+  5. Fix the prediction model or constraints
+  6. NO relaxing constraints
+  7. NO fallback strategies
 ```
 
 **Data Quality Failure:**
 ```
-If >10% factors have missing data:
-  1. Continue with available factors (per specification)
-  2. If >50% missing: Halt trading
-  3. Alert: CRITICAL
+If data quality issues detected:
+  1. Missing data for specific factor: Drop that factor for that period (per spec)
+  2. If >50% factors missing: HALT operations
+  3. Alert: CRITICAL - Data pipeline failure
+  4. NO synthetic data generation
+  5. NO imputation or forward filling
+  6. Fix data source, don't paper over the problem
 ```
+
+**Core Principle:**
+- Failures expose real problems that must be fixed
+- Fallbacks hide problems and create technical debt
+- If the system can't produce valid predictions, it should FAIL LOUD
+- Better to stop trading than to trade on garbage predictions
 
 ---
 
@@ -1156,17 +1208,21 @@ Week 9-10 (Ensemble) → Must complete before Week 11
 - Probability: Medium
 - Impact: Medium (suboptimal portfolios)
 - Mitigation:
-  - Hybrid approach: 0.7 * predicted + 0.3 * sample cov
   - Factor model reduces parameters (20 factors vs 5,050)
-  - Fallback to sample covariance if predictions unstable
+  - Guaranteed PSD via Cholesky decomposition
+  - Monitor eigenvalues and condition numbers
+  - If predictions unstable: Fix the model (retrain, adjust architecture)
+  - NO hybrid approaches, NO fallback to sample covariance
 
 **Risk 3: Optimization Layer Issues**
 - Probability: Low
 - Impact: High (no gradients, can't train end-to-end)
 - Mitigation:
-  - Test cvxpylayers thoroughly
-  - Fallback: Two-stage (predict returns, then optimize)
-  - Alternative: Direct weight prediction (no optimization layer)
+  - Test cvxpylayers thoroughly before full implementation
+  - Extensive unit tests for gradient flow
+  - Validate backward pass numerically
+  - If cvxpylayers fails: Debug and fix it, don't work around it
+  - NO two-stage fallbacks during production (either end-to-end works or it doesn't)
 
 **Risk 4: Insufficient Data**
 - Probability: Low
@@ -1200,9 +1256,10 @@ Week 9-10 (Ensemble) → Must complete before Week 11
 - Probability: Medium (during crises)
 - Impact: High (predicted cov matrix wrong)
 - Mitigation:
-  - Stress test on 2008, 2020 data
-  - Monitor ensemble disagreement
-  - Hybrid predicted + sample cov
+  - Stress test on 2008, 2020 data during development
+  - Monitor ensemble disagreement in production
+  - If predictions fail during crisis: Model needs retraining to handle regime
+  - NO hybrid approaches with sample covariance
 
 **Risk 3: Transaction Costs (future)**
 - Probability: High (when enabled)
