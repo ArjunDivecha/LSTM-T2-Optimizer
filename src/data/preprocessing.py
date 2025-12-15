@@ -91,12 +91,13 @@ class FactorPreprocessor:
         Create features for each factor:
         1. Raw daily return
         2. 3-day cumulative return
-        3. 20-day moving average return
-        4. 20-day rolling volatility
-        5. 60-day moving average return
-        6. 60-day rolling volatility
-        7. Cross-sectional rank (percentile among factors)
-        8. Z-score (rolling 60-day standardization)
+        3. 10-day cumulative return
+        4. 20-day moving average return
+        5. 20-day rolling volatility
+        6. 60-day moving average return
+        7. 60-day rolling volatility
+        8. Cross-sectional rank (percentile among factors)
+        9. Z-score (rolling 60-day standardization)
 
         Args:
             df: Winsorized factor returns
@@ -106,15 +107,16 @@ class FactorPreprocessor:
             DataFrame with multi-level columns: (factor, feature)
         """
         print("\nEngineering features...")
-        print("  Features per factor: 8")
+        print("  Features per factor: 9")
         print("    1. Raw return")
         print("    2. 3-day return")
-        print("    3. 20-day MA return")
-        print("    4. 20-day volatility")
-        print("    5. 60-day MA return")
-        print("    6. 60-day volatility")
-        print("    7. Cross-sectional rank")
-        print("    8. Z-score (60-day)")
+        print("    3. 10-day return")
+        print("    4. 20-day MA return")
+        print("    5. 20-day volatility")
+        print("    6. 60-day MA return")
+        print("    7. 60-day volatility")
+        print("    8. Cross-sectional rank")
+        print("    9. Z-score (60-day)")
 
         features = {}
 
@@ -129,23 +131,27 @@ class FactorPreprocessor:
             ret_3d = data.rolling(window=3, min_periods=2).apply(lambda x: (1 + x).prod() - 1, raw=True)
             features[(col, 'ret_3d')] = ret_3d.where(valid_mask[col], 0.0)
 
-            # Feature 3: 20-day moving average
+            # Feature 3: 10-day cumulative return
+            ret_10d = data.rolling(window=10, min_periods=5).apply(lambda x: (1 + x).prod() - 1, raw=True)
+            features[(col, 'ret_10d')] = ret_10d.where(valid_mask[col], 0.0)
+
+            # Feature 4: 20-day moving average
             ma_20 = data.rolling(window=20, min_periods=10).mean()
             features[(col, 'ma_20')] = ma_20.where(valid_mask[col], 0.0)
 
-            # Feature 4: 20-day volatility
+            # Feature 5: 20-day volatility
             vol_20 = data.rolling(window=20, min_periods=10).std()
             features[(col, 'vol_20')] = vol_20.where(valid_mask[col], 0.0)
 
-            # Feature 5: 60-day moving average
+            # Feature 6: 60-day moving average
             ma_60 = data.rolling(window=60, min_periods=30).mean()
             features[(col, 'ma_60')] = ma_60.where(valid_mask[col], 0.0)
 
-            # Feature 6: 60-day volatility
+            # Feature 7: 60-day volatility
             vol_60 = data.rolling(window=60, min_periods=30).std()
             features[(col, 'vol_60')] = vol_60.where(valid_mask[col], 0.0)
 
-            # Feature 8: Z-score (rolling 60-day)
+            # Feature 9: Z-score (rolling 60-day)
             rolling_mean = data.rolling(window=60, min_periods=30).mean()
             rolling_std = data.rolling(window=60, min_periods=30).std()
             zscore = (data - rolling_mean) / (rolling_std + 1e-8)  # Add epsilon to avoid /0
@@ -154,7 +160,7 @@ class FactorPreprocessor:
         # Create DataFrame with multi-level columns
         features_df = pd.DataFrame(features)
 
-        # Feature 7: Cross-sectional rank (across all factors each day)
+        # Feature 8: Cross-sectional rank (across all factors each day)
         # This is computed across factors, not per-factor
         print("  Computing cross-sectional ranks...")
         for date in df.index:
@@ -171,7 +177,7 @@ class FactorPreprocessor:
 
         print(f"  ✓ Features created: {features_df.shape}")
         print(f"    Shape: {features_df.shape[0]} days × {features_df.shape[1]} features")
-        print(f"    ({len(df.columns)} factors × 8 features)")
+        print(f"    ({len(df.columns)} factors × 9 features)")
 
         return features_df
 
@@ -185,7 +191,7 @@ class FactorPreprocessor:
         Create sliding window samples for training.
 
         For each valid date t:
-        - Input: features[t-lookback:t] (250 days × 104 factors × 8 features)
+        - Input: features[t-lookback:t] (250 days × 104 factors × 9 features)
         - Target: returns[t+1:t+6] (next 5 days for computing target stats)
 
         Handles missing data: If any factor has missing data in the target window,
@@ -208,7 +214,7 @@ class FactorPreprocessor:
         dates = []
 
         n_factors = returns_df.shape[1]
-        n_features = 8  # 8 features per factor
+        n_features = 9  # 9 features per factor
 
         # Need enough history for lookback + enough future for prediction
         min_date_idx = self.lookback_days
@@ -246,7 +252,7 @@ class FactorPreprocessor:
 
             X = np.zeros((self.lookback_days, n_factors, n_features))
             for f_idx, factor in enumerate(returns_df.columns):
-                for feat_idx, feature in enumerate(['return', 'ret_3d', 'ma_20', 'vol_20', 'ma_60', 'vol_60', 'rank', 'zscore']):
+                for feat_idx, feature in enumerate(['return', 'ret_3d', 'ret_10d', 'ma_20', 'vol_20', 'ma_60', 'vol_60', 'rank', 'zscore']):
                     X[:, f_idx, feat_idx] = input_window[(factor, feature)].values
 
             # Target: returns for next 5 days
