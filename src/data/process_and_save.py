@@ -23,17 +23,17 @@ def create_walk_forward_rolling_splits(
     y_samples: list,
     dates: list,
     window_years: int = 10,
-    start_test_year: int = 2020,
+    start_test_year: int = 2010,
     end_test_year: int = 2024,
 ) -> List[Dict]:
     """
     Create walk-forward splits with ROLLING 10-year window.
 
-    Annual retraining strategy (data starts 2010):
-    - 2020: Train on 2010-2019 (10 years) → Test on 2020
-    - 2021: Train on 2011-2020 (10 years) → Test on 2021
-    - 2022: Train on 2012-2021 (10 years) → Test on 2022
-    - 2023: Train on 2013-2022 (10 years) → Test on 2023
+    Annual retraining strategy (data starts 2000):
+    - 2010: Train on 2000-2009 (10 years) → Test on 2010
+    - 2011: Train on 2001-2010 (10 years) → Test on 2011
+    - 2012: Train on 2002-2011 (10 years) → Test on 2012
+    - ...
     - 2024: Train on 2014-2023 (10 years) → Test on 2024
 
     Each year gets a separate model trained on a ROLLING 10-year window.
@@ -286,7 +286,7 @@ def main():
         y_samples,
         dates,
         window_years=10,
-        start_test_year=2020,
+        start_test_year=2010,
         end_test_year=2024,
     )
 
@@ -299,10 +299,10 @@ def main():
     print("=" * 80)
     print("\nProcessed data saved to: data/processed/")
     print("  Structure:")
-    print("    data/processed/2020/  (train on 2010-2019, test on 2020)")
-    print("    data/processed/2021/  (train on 2011-2020, test on 2021)")
-    print("    data/processed/2022/  (train on 2012-2021, test on 2022)")
-    print("    data/processed/2023/  (train on 2013-2022, test on 2023)")
+    print("    data/processed/2010/  (train on 2000-2009, test on 2010)")
+    print("    data/processed/2011/  (train on 2001-2010, test on 2011)")
+    print("    data/processed/2012/  (train on 2002-2011, test on 2012)")
+    print("    ...")
     print("    data/processed/2024/  (train on 2014-2023, test on 2024)")
     print("\nEach directory contains:")
     print("  - train_X.pkl, train_y.pkl, train_dates.pkl")
