@@ -1,0 +1,86 @@
+# Model Configuration for Mac M4 Max Testing
+# Quick sanity check configuration for local development
+
+model:
+  name: "xLSTM-FactorForecasting-MacTest"
+
+  # Encoder (reduced for testing)
+  encoder:
+    num_layers: 2  # Reduced from 6
+    hidden_dim: 256  # Reduced from 1024
+    cell_types: ['sLSTM', 'mLSTM']  # Mix of both
+    dropout: [0.1, 0.2]
+
+  # Return prediction head
+  return_head:
+    hidden_dims: [128, 64]  # Reduced from [512, 256]
+    output_dim: 104  # Number of factors
+    dropout: 0.2
+
+  # Covariance prediction head (factor model)
+  covariance_head:
+    hidden_dims: [128, 64]  # Reduced from [512, 256]
+    num_latent_factors: 10  # Reduced from 20
+    output_dim: 104  # Number of factors
+    dropout: 0.2
+
+data:
+  lookback_days: 60  # Reduced from 250 for faster testing
+  prediction_horizon: 5
+  num_factors: 104
+  num_features: 9  # Per factor
+
+training:
+  # Quick test settings
+  batch_size: 32  # Reduced from 128
+  max_epochs: 5  # Just for sanity check
+  learning_rate: 1e-4
+
+  # Optimizer
+  optimizer: "AdamW"
+  betas: [0.9, 0.999]
+  weight_decay: 1e-5
+  eps: 1e-8
+
+  # Learning rate schedule
+  lr_warmup_epochs: 2
+  lr_schedule: "cosine"
+  lr_min: 1e-6
+
+  # Regularization
+  gradient_clip: 1.0
+  early_stopping_patience: 10
+
+  # Loss weights
+  alpha_return: 1.0  # Return prediction
+  beta_cov: 0.5  # Covariance prediction
+  gamma_sharpe: 2.0  # Portfolio performance
+  lambda_tc: 0.0  # Transaction costs (disabled)
+
+  # Device
+  device: "mps"  # Mac Metal Performance Shaders
+  precision: "float32"  # MPS doesn't support bfloat16 well yet
+  compile: false  # torch.compile may have issues on Mac
+
+  # Checkpointing
+  save_every_n_epochs: 5
+  save_best_only: true
+
+portfolio:
+  min_volatility_annual: 0.10  # 10% annualized
+  constraint_type: "long_only"  # w >= 0, sum(w) = 1
+  max_position_size: null  # No limit per specification
+
+paths:
+  data_dir: "data/processed"
+  checkpoint_dir: "models/checkpoints_mac_test"
+  log_dir: "logs/mac_test"
+
+notes: |
+  Quick test configuration for Mac M4 Max.
+  - Reduced model size for faster iteration
+  - 60-day lookback instead of 250
+  - Only 5 epochs for sanity checking
+  - Use this to verify everything works before H100 training
+
+  Expected runtime: ~10-15 minutes per epoch on Mac
