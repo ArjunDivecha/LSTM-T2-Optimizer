@@ -1,210 +1,266 @@
 """
-Process factor data and save train/val/test splits.
+Process factor data and create walk-forward expanding window splits.
 
 Philosophy: NO FALLBACKS, FAIL IS FAIL
-- Process all data with proper validation
-- Create expanding window splits per PRD
-- Save to parquet for efficient loading
+- Walk-forward validation with expanding window
+- Annual retraining (one model per year)
+- No static splits - retrain on growing data each year
 """
 
 import pandas as pd
 import numpy as np
 import pickle
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict, List, Tuple
 import sys
 
 from loader import load_and_validate_data
 from preprocessing import preprocess_data
 
 
-def create_train_val_test_splits(
+def create_walk_forward_expanding_splits(
     X_samples: list,
     y_samples: list,
     dates: list,
-    train_end_year: int = 2015,
-    val_end_year: int = 2020,
-) -> Dict:
+    start_test_year: int = 2016,
+    end_test_year: int = 2025,
+) -> List[Dict]:
     """
-    Create train/val/test splits using expanding window.
+    Create walk-forward splits with EXPANDING window.
 
-    Per PRD:
-    - Training: 2000-2015 (15 years)
-    - Validation: 2016-2020 (5 years)
-    - Test: 2021-2025 (5 years)
+    Annual retraining strategy:
+    - 2016: Train on 2000-2015 → Test on 2016
+    - 2017: Train on 2000-2016 → Test on 2017
+    - 2018: Train on 2000-2017 → Test on 2018
+    - ...
+    - 2025: Train on 2000-2024 → Test on 2025
+
+    Each year gets a separate model trained on ALL data up to that year.
+    This is EXPANDING window (not rolling).
 
     Args:
         X_samples: List of input arrays
         y_samples: List of target arrays
         dates: List of sample dates
-        train_end_year: Last year of training data
-        val_end_year: Last year of validation data
+        start_test_year: First year to test on (default: 2016)
+        end_test_year: Last year to test on (default: 2025)
 
     Returns:
-        Dictionary with train/val/test splits
+        List of dictionaries, one per year, each containing train/test splits
     """
     print("\n" + "=" * 80)
-    print("CREATING TRAIN/VAL/TEST SPLITS (Expanding Window)")
+    print("CREATING WALK-FORWARD EXPANDING WINDOW SPLITS")
     print("=" * 80)
+    print("\nStrategy: Expanding Window + Annual Retraining")
+    print("  - Each year trains on ALL data from 2000 to year-1")
+    print("  - Training window expands each year (gets more data)")
+    print("  - Retrain fresh model each year")
+    print("\n" + "=" * 80)
 
     # Convert dates to years
     years = np.array([d.year for d in dates])
 
-    # Create split indices
-    train_mask = years <= train_end_year
-    val_mask = (years > train_end_year) & (years <= val_end_year)
-    test_mask = years > val_end_year
+    all_splits = []
 
-    # Split data
-    X_train = [X_samples[i] for i in range(len(X_samples)) if train_mask[i]]
-    y_train = [y_samples[i] for i in range(len(y_samples)) if train_mask[i]]
-    dates_train = [dates[i] for i in range(len(dates)) if train_mask[i]]
+    for test_year in range(start_test_year, end_test_year + 1):
+        print(f"\n{'='*80}")
+        print(f"Year {test_year}:")
+        print(f"{'='*80}")
 
-    X_val = [X_samples[i] for i in range(len(X_samples)) if val_mask[i]]
-    y_val = [y_samples[i] for i in range(len(y_samples)) if val_mask[i]]
-    dates_val = [dates[i] for i in range(len(dates)) if val_mask[i]]
+        # EXPANDING WINDOW: Train on ALL data before test year
+        train_mask = years < test_year
+        test_mask = years == test_year
 
-    X_test = [X_samples[i] for i in range(len(X_samples)) if test_mask[i]]
-    y_test = [y_samples[i] for i in range(len(y_samples)) if test_mask[i]]
-    dates_test = [dates[i] for i in range(len(dates)) if test_mask[i]]
+        # Create splits
+        X_train = [X_samples[i] for i in range(len(X_samples)) if train_mask[i]]
+        y_train = [y_samples[i] for i in range(len(y_samples)) if train_mask[i]]
+        dates_train = [dates[i] for i in range(len(dates)) if train_mask[i]]
 
-    # Report split sizes
-    print(f"\nSplit Sizes:")
-    print(f"  Training:   {len(X_train):,} samples ({dates_train[0]} to {dates_train[-1]})")
-    print(f"  Validation: {len(X_val):,} samples ({dates_val[0]} to {dates_val[-1]})")
-    print(f"  Test:       {len(X_test):,} samples ({dates_test[0]} to {dates_test[-1]})")
-    print(f"  Total:      {len(X_samples):,} samples")
+        X_test = [X_samples[i] for i in range(len(X_samples)) if test_mask[i]]
+        y_test = [y_samples[i] for i in range(len(y_samples)) if test_mask[i]]
+        dates_test = [dates[i] for i in range(len(dates)) if test_mask[i]]
 
-    # Validate splits
-    if len(X_train) == 0:
-        raise ValueError("FAIL: Training set is empty! Check date ranges.")
-    if len(X_val) == 0:
-        raise ValueError("FAIL: Validation set is empty! Check date ranges.")
-    if len(X_test) == 0:
-        print("  ⚠️  WARNING: Test set is empty (may be expected if data doesn't extend to test period)")
+        # Validate splits
+        if len(X_train) == 0:
+            raise ValueError(
+                f"FAIL: Training set empty for year {test_year}!\n"
+                "FAIL IS FAIL: Check date ranges."
+            )
 
-    splits = {
-        'X_train': X_train,
-        'y_train': y_train,
-        'dates_train': dates_train,
-        'X_val': X_val,
-        'y_val': y_val,
-        'dates_val': dates_val,
-        'X_test': X_test,
-        'y_test': y_test,
-        'dates_test': dates_test,
-    }
+        if len(X_test) == 0:
+            print(f"  ⚠️  WARNING: No test data for year {test_year}")
+            print(f"      (Data may not extend to {test_year})")
+            continue  # Skip this year
 
-    print("\n✓ Splits created successfully")
-    return splits
+        # Report split
+        train_start = dates_train[0].year
+        train_end = dates_train[-1].year
+        test_start = dates_test[0].date()
+        test_end = dates_test[-1].date()
+
+        print(f"  Training:   {len(X_train):,} samples ({train_start}-{train_end})")
+        print(f"  Test:       {len(X_test):,} samples ({test_start} to {test_end})")
+        print(f"  Train span: {train_end - train_start + 1} years (EXPANDING)")
+
+        # Store split
+        split = {
+            'year': test_year,
+            'X_train': X_train,
+            'y_train': y_train,
+            'dates_train': dates_train,
+            'X_test': X_test,
+            'y_test': y_test,
+            'dates_test': dates_test,
+        }
+
+        all_splits.append(split)
+
+    print("\n" + "=" * 80)
+    print(f"✓ Created {len(all_splits)} walk-forward splits")
+    print("=" * 80)
+
+    return all_splits
 
 
-def convert_to_arrays(samples_dict: Dict) -> Dict:
+def convert_to_arrays(split: Dict) -> Dict:
     """
-    Convert lists of arrays to single numpy arrays for efficient storage.
+    Convert lists of samples to numpy arrays for a single split.
 
     Args:
-        samples_dict: Dictionary with lists of samples
+        split: Dictionary with lists of samples for one year
 
     Returns:
-        Dictionary with concatenated numpy arrays
+        Dictionary with numpy arrays
     """
-    print("\nConverting to numpy arrays...")
-
     arrays = {}
-    for key, value in samples_dict.items():
-        if 'dates' in key:
+
+    for key, value in split.items():
+        if key == 'year':
+            arrays[key] = value
+        elif 'dates' in key:
             # Keep dates as list
             arrays[key] = value
         else:
             # Stack into single array
             arrays[key] = np.array(value)
-            print(f"  {key}: {arrays[key].shape}")
 
     return arrays
 
 
-def save_processed_data(data_dict: Dict, output_dir: str = "data/processed"):
+def save_walk_forward_splits(splits: List[Dict], output_dir: str = "data/processed"):
     """
-    Save processed data to parquet and pickle files.
+    Save walk-forward splits to disk.
+
+    Creates separate directories for each year:
+    - data/processed/2016/train_X.pkl, test_X.pkl, etc.
+    - data/processed/2017/train_X.pkl, test_X.pkl, etc.
+    - ...
 
     Args:
-        data_dict: Dictionary with processed data
-        output_dir: Output directory
+        splits: List of split dictionaries
+        output_dir: Base output directory
     """
     print("\n" + "=" * 80)
-    print("SAVING PROCESSED DATA")
+    print("SAVING WALK-FORWARD SPLITS")
     print("=" * 80)
 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
-    # Save numpy arrays as pickle (efficient for arrays)
-    for split in ['train', 'val', 'test']:
-        X_key = f'X_{split}'
-        y_key = f'y_{split}'
-        dates_key = f'dates_{split}'
+    # Save each year's split
+    for split in splits:
+        year = split['year']
+        year_dir = output_path / str(year)
+        year_dir.mkdir(parents=True, exist_ok=True)
 
-        if X_key in data_dict and len(data_dict[X_key]) > 0:
-            # Save features (X)
-            X_path = output_path / f"{split}_X.pkl"
-            with open(X_path, 'wb') as f:
-                pickle.dump(data_dict[X_key], f, protocol=4)
-            print(f"  ✓ Saved {X_path} ({data_dict[X_key].nbytes / 1e6:.1f} MB)")
+        print(f"\nYear {year}:")
 
-            # Save targets (y)
-            y_path = output_path / f"{split}_y.pkl"
-            with open(y_path, 'wb') as f:
-                pickle.dump(data_dict[y_key], f, protocol=4)
-            print(f"  ✓ Saved {y_path} ({data_dict[y_key].nbytes / 1e6:.1f} MB)")
+        # Convert to arrays
+        arrays = convert_to_arrays(split)
 
-            # Save dates
-            dates_path = output_path / f"{split}_dates.pkl"
-            with open(dates_path, 'wb') as f:
-                pickle.dump(data_dict[dates_key], f, protocol=4)
-            print(f"  ✓ Saved {dates_path}")
+        # Save training data
+        train_X_path = year_dir / "train_X.pkl"
+        with open(train_X_path, 'wb') as f:
+            pickle.dump(arrays['X_train'], f, protocol=4)
+        print(f"  ✓ {train_X_path} ({arrays['X_train'].nbytes / 1e6:.1f} MB)")
 
-    # Save metadata
-    metadata = {
-        'n_samples_train': len(data_dict['X_train']),
-        'n_samples_val': len(data_dict['X_val']),
-        'n_samples_test': len(data_dict['X_test']) if len(data_dict['X_test']) > 0 else 0,
-        'input_shape': data_dict['X_train'][0].shape,
-        'output_shape': data_dict['y_train'][0].shape,
-        'date_range_train': (str(data_dict['dates_train'][0]), str(data_dict['dates_train'][-1])),
-        'date_range_val': (str(data_dict['dates_val'][0]), str(data_dict['dates_val'][-1])),
-        'date_range_test': (str(data_dict['dates_test'][0]), str(data_dict['dates_test'][-1])) if len(data_dict['dates_test']) > 0 else None,
+        train_y_path = year_dir / "train_y.pkl"
+        with open(train_y_path, 'wb') as f:
+            pickle.dump(arrays['y_train'], f, protocol=4)
+        print(f"  ✓ {train_y_path} ({arrays['y_train'].nbytes / 1e6:.1f} MB)")
+
+        train_dates_path = year_dir / "train_dates.pkl"
+        with open(train_dates_path, 'wb') as f:
+            pickle.dump(arrays['dates_train'], f, protocol=4)
+        print(f"  ✓ {train_dates_path}")
+
+        # Save test data
+        test_X_path = year_dir / "test_X.pkl"
+        with open(test_X_path, 'wb') as f:
+            pickle.dump(arrays['X_test'], f, protocol=4)
+        print(f"  ✓ {test_X_path} ({arrays['X_test'].nbytes / 1e6:.1f} MB)")
+
+        test_y_path = year_dir / "test_y.pkl"
+        with open(test_y_path, 'wb') as f:
+            pickle.dump(arrays['y_test'], f, protocol=4)
+        print(f"  ✓ {test_y_path} ({arrays['y_test'].nbytes / 1e6:.1f} MB)")
+
+        test_dates_path = year_dir / "test_dates.pkl"
+        with open(test_dates_path, 'wb') as f:
+            pickle.dump(arrays['dates_test'], f, protocol=4)
+        print(f"  ✓ {test_dates_path}")
+
+        # Save metadata for this year
+        metadata = {
+            'year': year,
+            'n_train_samples': len(arrays['X_train']),
+            'n_test_samples': len(arrays['X_test']),
+            'input_shape': arrays['X_train'][0].shape if len(arrays['X_train']) > 0 else None,
+            'output_shape': arrays['y_train'][0].shape if len(arrays['y_train']) > 0 else None,
+            'train_date_range': (str(arrays['dates_train'][0]), str(arrays['dates_train'][-1])),
+            'test_date_range': (str(arrays['dates_test'][0]), str(arrays['dates_test'][-1])),
+        }
+
+        metadata_path = year_dir / "metadata.pkl"
+        with open(metadata_path, 'wb') as f:
+            pickle.dump(metadata, f, protocol=4)
+        print(f"  ✓ {metadata_path}")
+
+    # Save overall summary
+    summary = {
+        'n_years': len(splits),
+        'years': [s['year'] for s in splits],
+        'strategy': 'walk_forward_expanding',
+        'retrain_frequency': 'annual',
+        'description': 'Expanding window: Each year trains on ALL data from 2000 to year-1',
     }
 
-    metadata_path = output_path / "metadata.pkl"
-    with open(metadata_path, 'wb') as f:
-        pickle.dump(metadata, f)
-    print(f"\n  ✓ Saved {metadata_path}")
+    summary_path = output_path / "walk_forward_summary.pkl"
+    with open(summary_path, 'wb') as f:
+        pickle.dump(summary, f, protocol=4)
+    print(f"\n  ✓ {summary_path}")
 
     # Print summary
     print("\n" + "=" * 80)
-    print("DATA PROCESSING SUMMARY")
+    print("WALK-FORWARD SPLITS SUMMARY")
     print("=" * 80)
-    print(f"Input shape:  {metadata['input_shape']} (lookback, factors, features)")
-    print(f"Output shape: {metadata['output_shape']} (horizon, factors)")
-    print(f"\nSamples:")
-    print(f"  Training:   {metadata['n_samples_train']:,}")
-    print(f"  Validation: {metadata['n_samples_val']:,}")
-    print(f"  Test:       {metadata['n_samples_test']:,}")
-    print(f"  Total:      {metadata['n_samples_train'] + metadata['n_samples_val'] + metadata['n_samples_test']:,}")
+    print(f"Strategy: Expanding Window + Annual Retraining")
+    print(f"Years: {len(splits)} models ({splits[0]['year']}-{splits[-1]['year']})")
+    print(f"\nEach year:")
+    print(f"  - Trains on expanding window (2000 to year-1)")
+    print(f"  - Tests on that year")
+    print(f"  - Separate model per year")
     print("=" * 80)
 
 
 def main():
-    """Main data processing pipeline."""
+    """Main data processing pipeline with walk-forward expanding splits."""
     print("\n" + "=" * 80)
-    print("FACTOR DATA PROCESSING PIPELINE")
+    print("FACTOR DATA PROCESSING - WALK-FORWARD EXPANDING")
     print("=" * 80)
     print("\nPhilosophy: NO FALLBACKS, FAIL IS FAIL")
-    print("  - All data must be valid")
-    print("  - No synthetic data")
-    print("  - Fail loud on errors")
-    print("\n" + "=" * 80)
+    print("Strategy: Expanding Window + Annual Retraining")
+    print("=" * 80)
 
     # Step 1: Load data
     print("\nStep 1: Loading factor returns...")
@@ -219,33 +275,35 @@ def main():
         prediction_horizon=5,
     )
 
-    # Step 3: Create train/val/test splits
-    print("\nStep 3: Creating train/val/test splits...")
-    splits = create_train_val_test_splits(
+    # Step 3: Create walk-forward expanding splits
+    print("\nStep 3: Creating walk-forward expanding splits...")
+    splits = create_walk_forward_expanding_splits(
         X_samples,
         y_samples,
         dates,
-        train_end_year=2015,
-        val_end_year=2020,
+        start_test_year=2016,
+        end_test_year=2025,
     )
 
-    # Step 4: Convert to arrays
-    print("\nStep 4: Converting to numpy arrays...")
-    arrays = convert_to_arrays(splits)
-
-    # Step 5: Save processed data
-    print("\nStep 5: Saving processed data...")
-    save_processed_data(arrays)
+    # Step 4: Save splits
+    print("\nStep 4: Saving walk-forward splits...")
+    save_walk_forward_splits(splits)
 
     print("\n" + "=" * 80)
     print("✓ DATA PROCESSING COMPLETE!")
     print("=" * 80)
     print("\nProcessed data saved to: data/processed/")
+    print("  Structure:")
+    print("    data/processed/2016/  (train on 2000-2015, test on 2016)")
+    print("    data/processed/2017/  (train on 2000-2016, test on 2017)")
+    print("    data/processed/2018/  (train on 2000-2017, test on 2018)")
+    print("    ...")
+    print("    data/processed/2025/  (train on 2000-2024, test on 2025)")
+    print("\nEach directory contains:")
     print("  - train_X.pkl, train_y.pkl, train_dates.pkl")
-    print("  - val_X.pkl, val_y.pkl, val_dates.pkl")
     print("  - test_X.pkl, test_y.pkl, test_dates.pkl")
     print("  - metadata.pkl")
-    print("\nReady for model training!")
+    print("\nReady for walk-forward model training!")
 
 
 if __name__ == "__main__":
@@ -255,4 +313,6 @@ if __name__ == "__main__":
         print(f"\n❌ FAIL: Data processing failed!")
         print(f"Error: {e}")
         print("\nFAIL IS FAIL: Fix the error and try again.")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
