@@ -1,10 +1,10 @@
 """
-Process factor data and create walk-forward expanding window splits.
+Process factor data and create walk-forward ROLLING 10-year window splits.
 
 Philosophy: NO FALLBACKS, FAIL IS FAIL
-- Walk-forward validation with expanding window
+- Walk-forward validation with ROLLING 10-year window
 - Annual retraining (one model per year)
-- No static splits - retrain on growing data each year
+- No static splits - retrain on rolling 10-year window each year
 """
 
 import pandas as pd
@@ -18,42 +18,44 @@ from loader import load_and_validate_data
 from preprocessing import preprocess_data
 
 
-def create_walk_forward_expanding_splits(
+def create_walk_forward_rolling_splits(
     X_samples: list,
     y_samples: list,
     dates: list,
-    start_test_year: int = 2016,
-    end_test_year: int = 2025,
+    window_years: int = 10,
+    start_test_year: int = 2020,
+    end_test_year: int = 2024,
 ) -> List[Dict]:
     """
-    Create walk-forward splits with EXPANDING window.
+    Create walk-forward splits with ROLLING 10-year window.
 
-    Annual retraining strategy:
-    - 2016: Train on 2000-2015 → Test on 2016
-    - 2017: Train on 2000-2016 → Test on 2017
-    - 2018: Train on 2000-2017 → Test on 2018
-    - ...
-    - 2025: Train on 2000-2024 → Test on 2025
+    Annual retraining strategy (data starts 2010):
+    - 2020: Train on 2010-2019 (10 years) → Test on 2020
+    - 2021: Train on 2011-2020 (10 years) → Test on 2021
+    - 2022: Train on 2012-2021 (10 years) → Test on 2022
+    - 2023: Train on 2013-2022 (10 years) → Test on 2023
+    - 2024: Train on 2014-2023 (10 years) → Test on 2024
 
-    Each year gets a separate model trained on ALL data up to that year.
-    This is EXPANDING window (not rolling).
+    Each year gets a separate model trained on a ROLLING 10-year window.
+    This is ROLLING window (not expanding).
 
     Args:
         X_samples: List of input arrays
         y_samples: List of target arrays
         dates: List of sample dates
-        start_test_year: First year to test on (default: 2016)
-        end_test_year: Last year to test on (default: 2025)
+        window_years: Rolling window size in years (default: 10)
+        start_test_year: First year to test on (default: 2020)
+        end_test_year: Last year to test on (default: 2024)
 
     Returns:
         List of dictionaries, one per year, each containing train/test splits
     """
     print("\n" + "=" * 80)
-    print("CREATING WALK-FORWARD EXPANDING WINDOW SPLITS")
+    print("CREATING WALK-FORWARD ROLLING 10-YEAR WINDOW SPLITS")
     print("=" * 80)
-    print("\nStrategy: Expanding Window + Annual Retraining")
-    print("  - Each year trains on ALL data from 2000 to year-1")
-    print("  - Training window expands each year (gets more data)")
+    print("\nStrategy: Rolling 10-Year Window + Annual Retraining")
+    print(f"  - Each year trains on {window_years} years of data")
+    print("  - Training window rolls forward each year")
     print("  - Retrain fresh model each year")
     print("\n" + "=" * 80)
 
@@ -67,8 +69,9 @@ def create_walk_forward_expanding_splits(
         print(f"Year {test_year}:")
         print(f"{'='*80}")
 
-        # EXPANDING WINDOW: Train on ALL data before test year
-        train_mask = years < test_year
+        # ROLLING WINDOW: Train on window_years of data before test year
+        train_start_year = test_year - window_years
+        train_mask = (years >= train_start_year) & (years < test_year)
         test_mask = years == test_year
 
         # Create splits
@@ -100,7 +103,7 @@ def create_walk_forward_expanding_splits(
 
         print(f"  Training:   {len(X_train):,} samples ({train_start}-{train_end})")
         print(f"  Test:       {len(X_test):,} samples ({test_start} to {test_end})")
-        print(f"  Train span: {train_end - train_start + 1} years (EXPANDING)")
+        print(f"  Train span: {train_end - train_start + 1} years (ROLLING {window_years}-year window)")
 
         # Store split
         split = {
@@ -230,9 +233,10 @@ def save_walk_forward_splits(splits: List[Dict], output_dir: str = "data/process
     summary = {
         'n_years': len(splits),
         'years': [s['year'] for s in splits],
-        'strategy': 'walk_forward_expanding',
+        'strategy': 'walk_forward_rolling',
         'retrain_frequency': 'annual',
-        'description': 'Expanding window: Each year trains on ALL data from 2000 to year-1',
+        'window_years': 10,
+        'description': 'Rolling 10-year window: Each year trains on 10 years of data',
     }
 
     summary_path = output_path / "walk_forward_summary.pkl"
@@ -244,22 +248,22 @@ def save_walk_forward_splits(splits: List[Dict], output_dir: str = "data/process
     print("\n" + "=" * 80)
     print("WALK-FORWARD SPLITS SUMMARY")
     print("=" * 80)
-    print(f"Strategy: Expanding Window + Annual Retraining")
+    print(f"Strategy: Rolling 10-Year Window + Annual Retraining")
     print(f"Years: {len(splits)} models ({splits[0]['year']}-{splits[-1]['year']})")
     print(f"\nEach year:")
-    print(f"  - Trains on expanding window (2000 to year-1)")
+    print(f"  - Trains on rolling 10-year window")
     print(f"  - Tests on that year")
     print(f"  - Separate model per year")
     print("=" * 80)
 
 
 def main():
-    """Main data processing pipeline with walk-forward expanding splits."""
+    """Main data processing pipeline with walk-forward rolling 10-year window splits."""
     print("\n" + "=" * 80)
-    print("FACTOR DATA PROCESSING - WALK-FORWARD EXPANDING")
+    print("FACTOR DATA PROCESSING - WALK-FORWARD ROLLING 10-YEAR")
     print("=" * 80)
     print("\nPhilosophy: NO FALLBACKS, FAIL IS FAIL")
-    print("Strategy: Expanding Window + Annual Retraining")
+    print("Strategy: Rolling 10-Year Window + Annual Retraining")
     print("=" * 80)
 
     # Step 1: Load data
@@ -275,14 +279,15 @@ def main():
         prediction_horizon=5,
     )
 
-    # Step 3: Create walk-forward expanding splits
-    print("\nStep 3: Creating walk-forward expanding splits...")
-    splits = create_walk_forward_expanding_splits(
+    # Step 3: Create walk-forward rolling splits
+    print("\nStep 3: Creating walk-forward rolling 10-year splits...")
+    splits = create_walk_forward_rolling_splits(
         X_samples,
         y_samples,
         dates,
-        start_test_year=2016,
-        end_test_year=2025,
+        window_years=10,
+        start_test_year=2020,
+        end_test_year=2024,
     )
 
     # Step 4: Save splits
@@ -294,11 +299,11 @@ def main():
     print("=" * 80)
     print("\nProcessed data saved to: data/processed/")
     print("  Structure:")
-    print("    data/processed/2016/  (train on 2000-2015, test on 2016)")
-    print("    data/processed/2017/  (train on 2000-2016, test on 2017)")
-    print("    data/processed/2018/  (train on 2000-2017, test on 2018)")
-    print("    ...")
-    print("    data/processed/2025/  (train on 2000-2024, test on 2025)")
+    print("    data/processed/2020/  (train on 2010-2019, test on 2020)")
+    print("    data/processed/2021/  (train on 2011-2020, test on 2021)")
+    print("    data/processed/2022/  (train on 2012-2021, test on 2022)")
+    print("    data/processed/2023/  (train on 2013-2022, test on 2023)")
+    print("    data/processed/2024/  (train on 2014-2023, test on 2024)")
     print("\nEach directory contains:")
     print("  - train_X.pkl, train_y.pkl, train_dates.pkl")
     print("  - test_X.pkl, test_y.pkl, test_dates.pkl")
