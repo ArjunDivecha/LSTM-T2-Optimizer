@@ -179,6 +179,18 @@ class FactorPreprocessor:
         print(f"    Shape: {features_df.shape[0]} days × {features_df.shape[1]} features")
         print(f"    ({len(df.columns)} factors × 9 features)")
 
+        # Fill any remaining NaN from rolling operations at start of series
+        # These occur when there isn't enough history for rolling windows
+        nan_count_before = features_df.isna().sum().sum()
+        if nan_count_before > 0:
+            print(f"  Filling {nan_count_before:,} NaN values from insufficient history...")
+            features_df = features_df.fillna(0.0)
+
+        # Clip extreme values to prevent numerical instability
+        # Aggressive clipping at ±100 (plenty for return-based features)
+        print(f"  Clipping extreme values to [-100, 100]...")
+        features_df = features_df.clip(lower=-100, upper=100)
+
         return features_df
 
     def create_samples(
