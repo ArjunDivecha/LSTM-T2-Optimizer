@@ -14,8 +14,8 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 import sys
 
-from loader import load_and_validate_data
-from preprocessing import preprocess_data
+from src.data.loader import load_and_validate_data
+from src.data.preprocessing import preprocess_data
 
 
 def create_walk_forward_rolling_splits(
