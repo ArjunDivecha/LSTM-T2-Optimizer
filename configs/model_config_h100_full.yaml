@@ -1,0 +1,130 @@
+# Model Configuration for H100 Full Training
+# Production-ready configuration per PRD specifications
+
+model:
+  name: "xLSTM-FactorForecasting-Production"
+
+  # Encoder (full specification)
+  encoder:
+    num_layers: 6
+    hidden_dim: 1024
+    cell_types: ['sLSTM', 'sLSTM', 'mLSTM', 'mLSTM', 'mLSTM', 'mLSTM']
+    dropout: [0.1, 0.1, 0.1, 0.15, 0.15, 0.2]  # Increasing through layers
+
+  # Return prediction head
+  return_head:
+    hidden_dims: [512, 256]
+    output_dim: 104  # Number of factors
+    dropout: 0.2
+
+  # Covariance prediction head (factor model)
+  covariance_head:
+    hidden_dims: [512, 256]
+    num_latent_factors: 20  # Latent factors for covariance decomposition
+    output_dim: 104  # Number of factors
+    dropout: 0.2
+
+data:
+  lookback_days: 250  # Full 1-year lookback
+  prediction_horizon: 5  # 5-day ahead forecast
+  num_factors: 104
+  num_features: 9  # Features per factor
+
+training:
+  # Full training settings
+  batch_size: 128  # Utilize H100 fully
+  max_epochs: 300
+  learning_rate: 1e-4  # Conservative for stability
+
+  # Optimizer
+  optimizer: "AdamW"
+  betas: [0.9, 0.999]
+  weight_decay: 1e-5
+  eps: 1e-8
+
+  # Learning rate schedule
+  lr_warmup_epochs: 10  # Warmup: 0 → 1e-4 over 10 epochs
+  lr_schedule: "cosine"  # Cosine annealing
+  lr_min: 1e-6  # Minimum learning rate
+
+  # Regularization
+  gradient_clip: 1.0  # Prevent exploding gradients
+  early_stopping_patience: 30  # Stop if no improvement for 30 epochs
+
+  # Loss weights (per PRD)
+  alpha_return: 1.0  # Return prediction loss
+  beta_cov: 0.5  # Covariance prediction loss
+  gamma_sharpe: 2.0  # Portfolio performance loss (most important!)
+  lambda_tc: 0.0  # Transaction costs (disabled for now)
+
+  # Device (H100 optimized)
+  device: "cuda"
+  precision: "bfloat16"  # H100 has native BF16 support
+  compile: true  # torch.compile for 2x speedup on H100
+
+  # Checkpointing
+  save_every_n_epochs: 10
+  save_best_only: false  # Keep multiple checkpoints
+  keep_last_n_checkpoints: 3
+
+  # Validation
+  validate_every_n_epochs: 1
+  validation_metric: "sharpe_ratio"  # Monitor Sharpe ratio
+
+portfolio:
+  min_volatility_annual: 0.10  # 10% annualized volatility constraint
+  min_volatility_5day: 0.0224  # 0.10 * sqrt(5/252) for 5-day periods
+  constraint_type: "long_only"  # w >= 0, sum(w) = 1
+  max_position_size: null  # No limit per specification
+  optimization_method: "cvxpy"  # Differentiable optimization
+
+paths:
+  data_dir: "data/processed"
+  checkpoint_dir: "models/production"
+  log_dir: "logs/production"
+  tensorboard_dir: "runs/production"
+
+hardware:
+  num_gpus: 1  # Single H100
+  num_workers: 8  # DataLoader workers
+  pin_memory: true  # Faster data transfer to GPU
+  prefetch_factor: 2
+
+ensemble:
+  num_models: 5  # Train 5 models with different seeds
+  seeds: [42, 123, 456, 789, 1024]
+  aggregation: "mean"  # Average predictions
+
+monitoring:
+  log_every_n_steps: 10
+  metrics:
+    - "loss_total"
+    - "loss_return"
+    - "loss_cov"
+    - "loss_sharpe"
+    - "val_sharpe_ratio"
+    - "val_portfolio_return"
+    - "val_portfolio_volatility"
+    - "val_turnover"
+    - "learning_rate"
+    - "gradient_norm"
+
+notes: |
+  Full production configuration for H100 GPU training.
+  - Complete 6-layer xLSTM architecture per PRD
+  - 250-day lookback window
+  - Dual-head prediction (returns + covariance)
+  - Differentiable portfolio optimization
+  - Multi-objective loss function
+  - BF16 mixed precision for H100
+  - torch.compile for 2x speedup
+
+  Expected performance on H100:
+  - Training time per epoch: 2-5 minutes
+  - Total training time: ~10-15 hours (with early stopping)
+  - Memory usage: ~30-40GB (out of 80GB available)
+
+  Philosophy: NO FALLBACKS, FAIL IS FAIL
+  - If training fails, debug and fix
+  - No fallback to simpler models
+  - No relaxing constraints
